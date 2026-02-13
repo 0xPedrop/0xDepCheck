@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# Cores
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+# Banner
+echo -e "${CYAN}${BOLD}"
+echo "           [ 0xDepCheck ]        "
+echo "             by 0xPedrop         "
+echo ""
+echo "         github.com/0xPedrop     "
+echo "    DEPENDENCY CONFUSION CHECKER "
+echo -e "${RESET}"
+
+if [ -z "$1" ]; then
+    echo -e "${YELLOW}[?] Digite o nome do pacote (ex: @org/lib ou lib-interna):${RESET}"
+    read -r PKG
+else
+    PKG="$1"
+fi
+
+if [ -z "$PKG" ]; then
+    echo -e "${RED}[!] Erro: Nenhum pacote fornecido. Saindo...${RESET}"
+    exit 1
+fi
+
+if [[ "$PKG" == @* ]] && [[ "$PKG" != */* ]]; then
+    echo -e "${RED}[!] Erro: Pacotes com '@' devem seguir o formato @escopo/nome.${RESET}"
+    exit 1
+fi
+
+echo ""
+echo -e "${CYAN}[*] Iniciando análise de: $PKG ...${RESET}"
+echo ""
+
+STATUS_PKG=$(curl -s -L -o /dev/null -w "%{http_code}" --connect-timeout 10 "https://registry.npmjs.org/$PKG")
+
+if [ "$STATUS_PKG" -eq "000" ]; then
+    echo -e "${RED}[!] Erro: Falha de conexão com registry.npmjs.org. Verifique sua internet.${RESET}"
+    exit 1
+fi
+
+if [ "$STATUS_PKG" -eq 200 ]; then
+    echo -e "${RED}❌ [SEGURO] O pacote '$PKG' já existe publicamente.${RESET}"
+    exit 0
+elif [ "$STATUS_PKG" -ne 404 ]; then
+    echo -e "${YELLOW}[!] Status inesperado para o pacote: $STATUS_PKG. Abortando.${RESET}"
+    exit 1
+fi
+
+if [[ "$PKG" == @* ]]; then
+    echo -e "${GREEN}✅ [ALVO] Pacote '$PKG' não existe no registro (404).${RESET}"
+    
+    ORG_FULL=$(echo "$PKG" | cut -d'/' -f1)
+    ORG_NAME=$(echo "$ORG_FULL" | sed 's/@//')
+
+    echo ""
+    echo -e "${CYAN}[*] Verificando disponibilidade da Organização: $ORG_FULL ...${RESET}"
+    
+    STATUS_ORG=$(curl -s -L -o /dev/null -w "%{http_code}" --connect-timeout 10 "https://www.npmjs.com/org/$ORG_NAME")
+
+    if [ "$STATUS_ORG" -eq 404 ]; then
+        echo -e "${GREEN}${BOLD}🔥🔥 [CRÍTICO] A ORGANIZAÇÃO $ORG_FULL ESTÁ LIVRE!${RESET}"
+        echo -e "${GREEN}    -> Você pode sequestrar o namespace e registrar o pacote.${RESET}"
+    elif [ "$STATUS_ORG" -eq 200 ]; then
+        echo -e "${RED}❌ [BLOQUEADO] A Org $ORG_FULL já tem dono.${RESET}"
+        echo -e "${YELLOW}    -> Sem controle da Org, você não pode publicar este pacote escopado.${RESET}"
+    else
+        echo -e "${YELLOW}[!] Erro ao validar Org (Status: $STATUS_ORG).${RESET}"
+    fi
+else
+    echo -e "${GREEN}${BOLD}🔥🔥 [VULNERÁVEL] Pacote direto '$PKG' está LIVRE!${RESET}"
+    echo -e "${GREEN}    -> Nome sem escopo detectado. Registro imediato disponível.${RESET}"
+fi
+
+echo ""
