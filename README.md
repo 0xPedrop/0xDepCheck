@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/banner.png" alt="0xDepCheck Banner" width="100%">
+  <img src="Banner.png" alt="0xDepCheck Banner" width="100%">
 </p>
 
 # 0xDepCheck 🏴‍☠️
