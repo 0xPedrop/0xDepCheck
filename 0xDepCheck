@@ -1,81 +1,257 @@
 #!/bin/bash
+#
+# 0xDepCheck - Dependency Confusion Checker
+# by 0xPedrop - github.com/0xPedrop
+#
+# Uso:
+#   ./0xdepcheck.sh @org/lib
+#   ./0xdepcheck.sh -f package.json
+#   ./0xdepcheck.sh -l packages.txt
+#   cat packages.txt | ./0xdepcheck.sh
+#   ./0xdepcheck.sh -f package.json -d 0.3     # delay entre requests
 
-# Cores
-RED='\033[1;31m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[1;36m'
-BOLD='\033[1m'
-RESET='\033[0m'
+RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'
+CYAN='\033[1;36m'; GRAY='\033[1;30m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# Banner
-echo -e "${CYAN}${BOLD}"
-echo "           [ 0xDepCheck ]        "
-echo "             by 0xPedrop         "
-echo ""
-echo "         github.com/0xPedrop     "
-echo "    DEPENDENCY CONFUSION CHECKER "
-echo -e "${RESET}"
+UA="Mozilla/5.0 (0xdepcheck; bugbounty-authorized)"
+REG="https://registry.npmjs.org"
+DELAY="0"
+RESERVE=0
+OUTDIR="./reserved"
 
-if [ -z "$1" ]; then
-    echo -e "${YELLOW}[?] Digite o nome do pacote (ex: @org/lib ou lib-interna):${RESET}"
-    read -r PKG
-else
-    PKG="$1"
-fi
+banner() {
+  echo -e "${CYAN}${BOLD}"
+  echo "           [ 0xDepCheck ]        "
+  echo "             by 0xPedrop         "
+  echo ""
+  echo "         github.com/0xPedrop     "
+  echo "    DEPENDENCY CONFUSION CHECKER "
+  echo -e "${RESET}"
+}
 
-if [ -z "$PKG" ]; then
-    echo -e "${RED}[!] Erro: Nenhum pacote fornecido. Saindo...${RESET}"
-    exit 1
-fi
+usage() {
+  echo "Uso: $0 [-f package.json] [-l lista.txt] [-d delay] [-r] [--outdir DIR] [pacote]"
+  echo "     tambem le nomes via stdin (um por linha)"
+  echo ""
+  echo "  -r, --reserve   em VULNERAVEL/CANDIDATO, pergunta [y/N] e tenta publicar"
+  echo "                  um placeholder inerte (precisa de 'npm login' antes)"
+  echo "  --outdir DIR    pasta onde o placeholder e montado (default ./reserved)"
+  exit 1
+}
 
-if [[ "$PKG" == @* ]] && [[ "$PKG" != */* ]]; then
-    echo -e "${RED}[!] Erro: Pacotes com '@' devem seguir o formato @escopo/nome.${RESET}"
-    exit 1
-fi
+C_SAFE=0; C_VULN=0; C_CAND=0; C_BLOCK=0; C_INVALID=0; C_ERR=0
 
-echo ""
-echo -e "${CYAN}[*] Iniciando análise de: $PKG ...${RESET}"
-echo ""
+http_code() {
+  curl -s -L -o /dev/null -w "%{http_code}" -A "$UA" --connect-timeout 10 "$1"
+}
 
-STATUS_PKG=$(curl -s -L -o /dev/null -w "%{http_code}" --connect-timeout 10 "https://registry.npmjs.org/$PKG")
+# extrai os nomes de deps de um package.json
+parse_pkgjson() {
+  local f="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '[.dependencies, .devDependencies, .peerDependencies, .optionalDependencies]
+           | map(select(. != null)) | add // {} | keys[]' "$f" 2>/dev/null
+  else
+    python3 -I - "$f" 2>/dev/null <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+seen = set()
+for k in ("dependencies","devDependencies","peerDependencies","optionalDependencies"):
+    for name in (d.get(k) or {}):
+        if name not in seen:
+            seen.add(name); print(name)
+PY
+  fi
+}
 
-if [ "$STATUS_PKG" -eq "000" ]; then
-    echo -e "${RED}[!] Erro: Falha de conexão com registry.npmjs.org. Verifique sua internet.${RESET}"
-    exit 1
-fi
+scope_status() {
+  local scope_name="$1" 
+  local org_code
+  org_code=$(http_code "https://www.npmjs.com/org/$scope_name")
+  echo "$org_code"
+}
 
-if [ "$STATUS_PKG" -eq 200 ]; then
-    echo -e "${RED}❌ [SEGURO] O pacote '$PKG' já existe publicamente.${RESET}"
-    exit 0
-elif [ "$STATUS_PKG" -ne 404 ]; then
-    echo -e "${YELLOW}[!] Status inesperado para o pacote: $STATUS_PKG. Abortando.${RESET}"
-    exit 1
-fi
+do_publish() {
+  local pkg="$1"
+  command -v npm >/dev/null 2>&1 || {
+    echo -e "   ${RED}npm nao encontrado no PATH — nao da pra publicar.${RESET}"; return 1; }
+  local who; who=$(npm whoami 2>/dev/null)
+  if [ -z "$who" ]; then
+    echo -e "   ${RED}Voce nao esta logado no npm. Rode 'npm login' e tente de novo.${RESET}"; return 1
+  fi
+  echo -e "   ${GRAY}logado como: $who${RESET}"
 
-if [[ "$PKG" == @* ]]; then
-    echo -e "${GREEN}✅ [ALVO] Pacote '$PKG' não existe no registro (404).${RESET}"
-    
-    ORG_FULL=$(echo "$PKG" | cut -d'/' -f1)
-    ORG_NAME=$(echo "$ORG_FULL" | sed 's/@//')
+  local safe dir; safe=$(echo "$pkg" | tr '/@' '__'); dir="$OUTDIR/$safe"
+  mkdir -p "$dir"
+  cat > "$dir/package.json" <<EOF
+{
+  "name": "$pkg",
+  "version": "0.0.1",
+  "description": "Security research placeholder (dependency confusion PoC). Inert: no install hooks, no payload, no data collection.",
+  "author": "0xPedrop <contato.0xpedrop@proton.me> (https://github.com/0xPedrop)",
+  "license": "MIT",
+  "keywords": ["security-research", "dependency-confusion", "poc", "0xpedrop"],
+  "main": "index.js"
+}
+EOF
+  cat > "$dir/index.js" <<'EOF'
+/* Dependency confusion PoC placeholder by 0xPedrop — inert, authorized research only.
+   Contato: contato.0xpedrop@proton.me | https://github.com/0xPedrop */
+module.exports = { poc: "0xPedrop", note: "dependency-confusion placeholder - inert" };
+EOF
+  cat > "$dir/README.md" <<'EOF'
+# Dependency Confusion PoC (placeholder)
+Pesquisa de seguranca autorizada por 0xPedrop. Nao malicioso: sem scripts de install,
+sem payload, sem coleta de dados. Contato: contato.0xpedrop@proton.me
+EOF
 
-    echo ""
-    echo -e "${CYAN}[*] Verificando disponibilidade da Organização: $ORG_FULL ...${RESET}"
-    
-    STATUS_ORG=$(curl -s -L -o /dev/null -w "%{http_code}" --connect-timeout 10 "https://www.npmjs.com/org/$ORG_NAME")
+  local pub="publish"
+  [[ "$pkg" == @* ]] && pub="publish --access public"
+  echo -e "   ${CYAN}>> npm $pub  (em $dir)${RESET}"
+  if ( cd "$dir" && npm $pub ); then
+    echo -e "   ${GREEN}${BOLD}>> REGISTRADO: $pkg  (voce agora e dono; unpublish so em 72h)${RESET}"
+  else
+    echo -e "   ${RED}>> falha ao publicar '$pkg' (escopo com dono? nome ja existe? sem permissao?)${RESET}"
+  fi
+}
 
-    if [ "$STATUS_ORG" -eq 404 ]; then
-        echo -e "${GREEN}${BOLD}🔥🔥 [CRÍTICO] A ORGANIZAÇÃO $ORG_FULL ESTÁ LIVRE!${RESET}"
-        echo -e "${GREEN}    -> Você pode sequestrar o namespace e registrar o pacote.${RESET}"
-    elif [ "$STATUS_ORG" -eq 200 ]; then
-        echo -e "${RED}❌ [BLOQUEADO] A Org $ORG_FULL já tem dono.${RESET}"
-        echo -e "${YELLOW}    -> Sem controle da Org, você não pode publicar este pacote escopado.${RESET}"
-    else
-        echo -e "${YELLOW}[!] Erro ao validar Org (Status: $STATUS_ORG).${RESET}"
+maybe_reserve() {
+  local pkg="$1"
+  [ "$RESERVE" != "1" ] && return
+  if [ ! -e /dev/tty ]; then
+    echo -e "   ${GRAY}(sem terminal interativo; pulei o registro de '$pkg')${RESET}"; return
+  fi
+  printf "   ${YELLOW}>> Tentar registrar '%s' agora? [y/N] ${RESET}" "$pkg" > /dev/tty
+  local ans; read -r ans < /dev/tty
+  case "$ans" in
+    y|Y|s|S|yes|sim|SIM) do_publish "$pkg" ;;
+    *) echo -e "   ${GRAY}pulado.${RESET}" ;;
+  esac
+}
+
+check_pkg() {
+  local pkg="$1"
+  pkg="$(echo "$pkg" | tr -d '"'"'"',' | xargs 2>/dev/null)"
+  [ -z "$pkg" ] && return
+  case "$pkg" in \#*) return ;; esac
+
+  # --- validacao de forma ---
+  if [[ "$pkg" == @* ]]; then
+    if [[ "$pkg" != @*/* ]]; then
+      echo -e "${YELLOW}[INVALIDO]${RESET} $pkg ${GRAY}(escopo sem nome: use @escopo/nome)${RESET}"
+      ((C_INVALID++)); return
     fi
-else
-    echo -e "${GREEN}${BOLD}🔥🔥 [VULNERÁVEL] Pacote direto '$PKG' está LIVRE!${RESET}"
-    echo -e "${GREEN}    -> Nome sem escopo detectado. Registro imediato disponível.${RESET}"
+  elif [[ "$pkg" == */* ]]; then
+    echo -e "${YELLOW}[INVALIDO]${RESET} $pkg ${GRAY}(nome sem escopo nao pode ter '/'; o real provavelmente e @$pkg)${RESET}"
+    ((C_INVALID++)); return
+  fi
+
+  local enc url
+  if [[ "$pkg" == @* ]]; then
+    enc="${pkg/\//%2F}"
+  else
+    enc="$pkg"
+  fi
+  url="$REG/$enc"
+
+  local code
+  code=$(http_code "$url")
+  [ -n "$DELAY" ] && [ "$DELAY" != "0" ] && sleep "$DELAY"
+
+  case "$code" in
+    000)
+      echo -e "${RED}[ERRO]${RESET} $pkg ${GRAY}(falha de conexao com o registry)${RESET}"
+      ((C_ERR++)) ;;
+    200)
+      echo -e "${GRAY}[SEGURO]${RESET} $pkg ${GRAY}(existe publicamente)${RESET}"
+      ((C_SAFE++)) ;;
+    404)
+      if [[ "$pkg" == @* ]]; then
+        local scope="${pkg%%/*}"; local sname="${scope#@}"
+        local scode; scode=$(scope_status "$sname")
+        case "$scode" in
+          200)
+            echo -e "${RED}[BLOQUEADO]${RESET} $pkg ${GRAY}(pacote livre, mas o escopo $scope tem dono)${RESET}"
+            ((C_BLOCK++)) ;;
+          404)
+            echo -e "${GREEN}${BOLD}[CANDIDATO]${RESET} $pkg ${GREEN}(pacote 404 e org $scope sem pagina)${RESET}"
+            echo -e "          ${YELLOW}-> confirme o escopo manual: pode ser escopo de USUARIO. Teste: npm access list packages $scope${RESET}"
+            ((C_CAND++)); maybe_reserve "$pkg" ;;
+          *)
+            echo -e "${GREEN}${BOLD}[CANDIDATO]${RESET} $pkg ${GRAY}(pacote 404; checagem de org inconclusiva: HTTP $scode)${RESET}"
+            echo -e "          ${YELLOW}-> confirme o escopo $scope manualmente (logado no npm / npm access list packages $scope)${RESET}"
+            ((C_CAND++)); maybe_reserve "$pkg" ;;
+        esac
+      else
+        echo -e "${GREEN}${BOLD}[VULNERAVEL]${RESET} $pkg ${GREEN}(nome sem escopo livre -> registravel)${RESET}"
+        ((C_VULN++)); maybe_reserve "$pkg"
+      fi ;;
+    429)
+      echo -e "${YELLOW}[RATE-LIMIT]${RESET} $pkg ${GRAY}(429 — espere e repita)${RESET}"
+      ((C_ERR++)) ;;
+    *)
+      echo -e "${YELLOW}[INCONCLUSIVO]${RESET} $pkg ${GRAY}(HTTP $code)${RESET}"
+      ((C_ERR++)) ;;
+  esac
+}
+
+summary() {
+  echo ""
+  echo -e "${CYAN}${BOLD}=== Resumo ===${RESET}"
+  echo -e "  ${GREEN}VULNERAVEL${RESET} (unscoped livre) : $C_VULN"
+  echo -e "  ${GREEN}CANDIDATO${RESET}  (scoped, confirmar): $C_CAND"
+  echo -e "  ${RED}BLOQUEADO${RESET}  (escopo com dono) : $C_BLOCK"
+  echo -e "  ${GRAY}SEGURO${RESET}     (ja existe)        : $C_SAFE"
+  echo -e "  ${YELLOW}INVALIDO${RESET}   (forma errada)     : $C_INVALID"
+  echo -e "  ${YELLOW}ERRO/INCONCL.${RESET}                  : $C_ERR"
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0 2>/dev/null
 fi
 
-echo ""
+# ------------------------- entrada -------------------------
+FILE=""; LIST=""; PKG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f) FILE="$2"; shift 2 ;;
+    -l) LIST="$2"; shift 2 ;;
+    -d) DELAY="$2"; shift 2 ;;
+    -r|--reserve) RESERVE=1; shift ;;
+    --outdir) OUTDIR="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    *) PKG="$1"; shift ;;
+  esac
+done
+
+banner
+
+if [ "$RESERVE" = "1" ]; then
+  echo -e "${YELLOW}${BOLD}[!] Modo --reserve ON: vai perguntar e PUBLICAR de verdade em VULN/CANDIDATO.${RESET}"
+  echo -e "${YELLOW}    So use em nomes de programas onde dependency confusion esta no escopo.${RESET}\n"
+fi
+
+if [ -n "$FILE" ]; then
+  [ -f "$FILE" ] || { echo -e "${RED}[!] Arquivo nao encontrado: $FILE${RESET}"; exit 1; }
+  echo -e "${CYAN}[*] Lendo dependencias de: $FILE${RESET}\n"
+  while IFS= read -r name; do check_pkg "$name"; done < <(parse_pkgjson "$FILE")
+  summary
+elif [ -n "$LIST" ]; then
+  [ -f "$LIST" ] || { echo -e "${RED}[!] Lista nao encontrada: $LIST${RESET}"; exit 1; }
+  echo -e "${CYAN}[*] Lendo lista: $LIST${RESET}\n"
+  while IFS= read -r name; do check_pkg "$name"; done < "$LIST"
+  summary
+elif [ -n "$PKG" ]; then
+  echo -e "${CYAN}[*] Analisando: $PKG${RESET}\n"
+  check_pkg "$PKG"
+elif [ ! -t 0 ]; then
+  echo -e "${CYAN}[*] Lendo nomes do stdin${RESET}\n"
+  while IFS= read -r name; do check_pkg "$name"; done
+  summary
+else
+  echo -e "${YELLOW}[?] Nenhuma entrada. Use -f, -l, stdin ou passe um pacote.${RESET}"
+  usage
+fi
