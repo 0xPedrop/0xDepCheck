@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/github/v/release/0xPedrop/0xDepCheck?color=8b5cf6" alt="Release">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License">
   <img src="https://img.shields.io/badge/registry-NPM-red.svg" alt="NPM">
   <img src="https://img.shields.io/badge/purpose-Bug%20Bounty-black.svg" alt="Bug Bounty">
