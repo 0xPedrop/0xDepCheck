@@ -20,14 +20,14 @@ O **0xDepCheck** consulta o registro público do NPM para confirmar se uma
 dependência interna pode ser sequestrada, verificando tanto a disponibilidade
 do pacote quanto a da organização (escopo).
 
-## ✨ Funcionalidades
+## Funcionalidades
 
 - **Validação automatizada** - checa se o pacote retorna `404` (livre) no registro oficial.
 - **Verificação de org hijacking** - confirma se o escopo (`@org`) está disponível para registro.
 - **Detecção de escopo** - diferencia pacotes globais de pacotes escopados automaticamente.
 - **Pronto para bug bounty** - agiliza a prova de conceito (PoC) para relatórios de segurança.
 
-## ⚙️ Instalação
+## Instalação
 
 Instale globalmente para usar durante o reconhecimento (recon):
 
@@ -36,7 +36,7 @@ chmod +x 0xDepCheck          # dá permissão de execução
 sudo mv 0xDepCheck /usr/local/bin/   # move para o PATH
 ```
 
-## 🚀 Uso
+## Uso
 
 **Pacotes com escopo (org hijacking)** - verifica se o namespace da empresa pode ser sequestrado:
 
@@ -56,7 +56,7 @@ sudo mv 0xDepCheck /usr/local/bin/   # move para o PATH
 0xDepCheck
 ```
 
-## 🧠 Lógica de diagnóstico
+## Lógica de diagnóstico
 
 | Resultado           | Significado                                                                              |
 | ------------------- | ---------------------------------------------------------------------------------------- |
